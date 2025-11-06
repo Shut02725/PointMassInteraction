@@ -6,10 +6,12 @@ import math
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from collections import deque
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from target_integration.self_state_estimation import self_estimation
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-from target_integration.partner_state_estimation import partner_estimation
 
 class SoloTrackingEnv:
     def __init__(self, dt=0.01, noise_config=None):
@@ -22,15 +24,15 @@ class SoloTrackingEnv:
         # noise default setting
         if noise_config is None:
             noise_config = {
-                'visual_pos_noise_std': 0.003,                # visual pos noise
-                'visual_vel_noise_std': 0.03,                 # visual vel noise
-                'visual_acc_noise_std': 0.3,                  # visual acc noise
+                'visual_pos_noise_std': 0.005,                # visual pos noise
+                'visual_vel_noise_std': 0.05,                 # visual vel noise
+                'visual_acc_noise_std': 0.5,                  # visual acc noise
 
-                'proprioceptive_pos_noise_std': 0.005,        # proprioceptive pos noise
-                'proprioceptive_vel_noise_std': 0.02,         # proprioceptive vel noise
+                'haptic_weber_ratio': 0.05,                   # haptic noise 10%
+                'haptic_base_noise': 0.05,                     # haptic noise 0.1N
                 
-                'motor_weber_ratio': 0.05,                    # motor noise 5%
-                'motor_base_noise': 0.03,                     # motor noise 0.03N
+                'motor_weber_ratio': 0.02,                    # motor noise 5%
+                'motor_base_noise': 0.01,                     # motor noise 0.03N
 
                 'enable_noise': True
             }
@@ -67,6 +69,11 @@ class SoloTrackingEnv:
             'time': []
         }
 
+        Q = 50 * torch.tensor([[self.dt**6 / 36, self.dt**5 / 12, self.dt**4 / 6],
+                                [self.dt**5 / 12, self.dt**4 / 4, self.dt**3 / 2],
+                                [self.dt**4 / 6, self.dt**3 / 2, self.dt**2]], dtype=torch.float32, device=device)
+
+
         n_obs_self = 4
 
         self.agent1_self_obs = torch.zeros(n_obs_self, device=device)
@@ -94,21 +101,21 @@ class SoloTrackingEnv:
         
         # Position
         x = (3*torch.sin(1.8*t) + 3.4*torch.sin(1.9*t) + 
-             2.5*torch.sin(1.82*t) + 4.3*torch.sin(2.34*t)) / 10
+             2.5*torch.sin(1.82*t) + 4.3*torch.sin(2.34*t)) / 100
         y = (3*torch.sin(1.1*t) + 3.2*torch.sin(3.6*t) + 
-             3.8*torch.sin(2.5*t) + 4.8*torch.sin(1.48*t)) / 10
+             3.8*torch.sin(2.5*t) + 4.8*torch.sin(1.48*t)) / 100
         
         # Velocity
         vx = (3*1.8*torch.cos(1.8*t) + 3.4*1.9*torch.cos(1.9*t) + 
-              2.5*1.82*torch.cos(1.82*t) + 4.3*2.34*torch.cos(2.34*t)) / 10
+              2.5*1.82*torch.cos(1.82*t) + 4.3*2.34*torch.cos(2.34*t)) / 100
         vy = (3*1.1*torch.cos(1.1*t) + 3.2*3.6*torch.cos(3.6*t) + 
-              3.8*2.5*torch.cos(2.5*t) + 4.8*1.48*torch.cos(1.48*t)) / 10
+              3.8*2.5*torch.cos(2.5*t) + 4.8*1.48*torch.cos(1.48*t)) / 100
         
         # Acceleration
         ax = (-3*1.8*1.8*torch.sin(1.8*t) - 3.4*1.9*1.9*torch.sin(1.9*t) - 
-              2.5*1.82*1.82*torch.sin(1.82*t) - 4.3*2.34*2.34*torch.sin(2.34*t)) / 10
+              2.5*1.82*1.82*torch.sin(1.82*t) - 4.3*2.34*2.34*torch.sin(2.34*t)) / 100
         ay = (-3*1.1*1.1*torch.sin(1.1*t) - 3.2*3.6*3.6*torch.sin(3.6*t) - 
-              3.8*2.5*2.5*torch.sin(2.5*t) - 4.8*1.48*1.48*torch.sin(1.48*t)) / 10
+              3.8*2.5*2.5*torch.sin(2.5*t) - 4.8*1.48*1.48*torch.sin(1.48*t)) / 100
         
         pos = torch.stack([x, y])
         vel = torch.stack([vx, vy])
@@ -124,7 +131,8 @@ class SoloTrackingEnv:
         FB_control = - kp*pos_error - kd*vel_error - ka*acc_error
 
         control_magnitude = torch.norm(FB_control)
-        motor_noise_std = (self.noise_config['motor_base_noise'] + self.noise_config['motor_weber_ratio'] * control_magnitude)
+        motor_noise_std = (self.noise_config['motor_base_noise'] +
+                          self.noise_config['motor_weber_ratio'] * control_magnitude)
         FB_control_noisy = self.add_noise(FB_control, motor_noise_std)
 
         self.agent1_control_buffer.append(FB_control_noisy)
@@ -142,7 +150,8 @@ class SoloTrackingEnv:
         FB_control = - kp*pos_error - kd*vel_error - ka*acc_error
 
         control_magnitude = torch.norm(FB_control)
-        motor_noise_std = (self.noise_config['motor_base_noise'] + self.noise_config['motor_weber_ratio'] * control_magnitude)
+        motor_noise_std = (self.noise_config['motor_base_noise'] +
+                          self.noise_config['motor_weber_ratio'] * control_magnitude)
         FB_control_noisy = self.add_noise(FB_control, motor_noise_std)
 
         self.agent2_control_buffer.append(FB_control_noisy)
@@ -162,47 +171,54 @@ class SoloTrackingEnv:
         target_vel_noisy = self.add_noise(self.target_vel, self.noise_config['visual_vel_noise_std'])
         target_acc_noisy = self.add_noise(self.target_acc, self.noise_config['visual_acc_noise_std'])
         
-        # 2. 固有受容感覚ノイズ（自己の状態）
-        agent1_pos_sensed = self.add_noise(self.agent1_pos, self.noise_config['proprioceptive_pos_noise_std'])
-        agent1_vel_sensed = self.add_noise(self.agent1_vel, self.noise_config['proprioceptive_vel_noise_std'])
-        
-        agent2_pos_sensed = self.add_noise(self.agent2_pos, self.noise_config['proprioceptive_pos_noise_std'])
-        agent2_vel_sensed = self.add_noise(self.agent2_vel, self.noise_config['proprioceptive_vel_noise_std'])
-        
-        # Self observation（ノイズのある観測を使用）
-        self.agent1_self_obs[0] = agent1_pos_sensed[0] - target_pos_noisy[0]
-        self.agent1_self_obs[1] = torch.zeros(1, device=device)
-        self.agent1_self_obs[2] = agent1_pos_sensed[1] - target_pos_noisy[1]
-        self.agent1_self_obs[3] = torch.zeros(1, device=device)
-        
-        self.agent2_self_obs[0] = agent2_pos_sensed[0] - target_pos_noisy[0]
-        self.agent2_self_obs[1] = torch.zeros(1, device=device)
-        self.agent2_self_obs[2] = agent2_pos_sensed[1] - target_pos_noisy[1]
-        self.agent2_self_obs[3] = torch.zeros(1, device=device)
-        
-        # === 制御計算用のエラー（真の状態を使用） ===
-        # 注: 実際の生物システムでは、制御もノイズありの知覚に基づくが、
-        # ここでは制御性能評価のため真の誤差も保持
-        self.agent1_pos_error = agent1_pos_sensed - target_pos_noisy
-        self.agent1_vel_error = agent1_vel_sensed - target_vel_noisy
-        self.agent1_acc_error = self.agent1_acc - target_acc_noisy
+        agent1_pos_noisy = self.add_noise(self.agent1_pos, self.noise_config['visual_pos_noise_std'])
+        agent1_vel_noisy = self.add_noise(self.agent1_vel, self.noise_config['visual_vel_noise_std'])
+        agent1_acc_noisy = self.add_noise(self.agent1_acc, self.noise_config['visual_acc_noise_std'])
 
-        self.agent2_pos_error = agent2_pos_sensed - target_pos_noisy
-        self.agent2_vel_error = agent2_vel_sensed - target_vel_noisy
-        self.agent2_acc_error = self.agent2_acc - target_acc_noisy
+        agent2_pos_noisy = self.add_noise(self.agent2_pos, self.noise_config['visual_pos_noise_std'])
+        agent2_vel_noisy = self.add_noise(self.agent2_vel, self.noise_config['visual_vel_noise_std'])
+        agent2_acc_noisy = self.add_noise(self.agent2_acc, self.noise_config['visual_acc_noise_std'])
+        
+        # === Self state estimation（制御用カルマンフィルタ）===
+        # 観測値の構成(interaction goal integration)
+        self.agent1_self_obs = torch.stack([
+            agent1_pos_noisy[0] - target_pos_noisy[0],          # 目標との位置誤差（x軸）
+            torch.tensor(0.0, device=device), # パートナー予測目標との誤差（x軸）
+            agent1_pos_noisy[1] - target_pos_noisy[1],          # 目標との位置誤差（y軸）
+            torch.tensor(0.0, device=device)  # パートナー予測目標との誤差（y軸）
+        ])
+        
+        self.agent2_self_obs = torch.stack([
+            agent2_pos_noisy[0] - target_pos_noisy[0],
+            torch.tensor(0.0, device=device),
+            agent2_pos_noisy[1] - target_pos_noisy[1],
+            torch.tensor(0.0, device=device)
+        ])
+
+        # 推定状態から位置・速度・加速度を抽出
+        # agent1_state_estimated: [pos_x, vel_x, acc_x, pos_y, vel_y, acc_y]
+        self.agent1_pos_error = agent1_pos_noisy - target_pos_noisy
+        self.agent1_vel_error = agent1_vel_noisy - target_vel_noisy
+        self.agent1_acc_error = agent1_acc_noisy - target_acc_noisy
+
+        self.agent2_pos_error = agent2_pos_noisy - target_pos_noisy
+        self.agent2_vel_error = agent2_vel_noisy - target_vel_noisy
+        self.agent2_acc_error = agent2_acc_noisy - target_acc_noisy
+
+        # print("estimated:", self.agent1_pos_error, "true:", self.agent1_pos - self.target_pos)
 
         # フィードバック制御（運動指令にノイズが加わる）
         self.Agent1_FBController(self.agent1_pos_error, self.agent1_vel_error, self.agent1_acc_error)
         self.Agent2_FBController(self.agent2_pos_error, self.agent2_vel_error, self.agent2_acc_error)
 
-        # === 物理シミュレーション（真の状態の更新） ===
+        # === 物理シミュレーション（真の状態で更新）===
         self.agent1_pos += self.agent1_vel * self.dt + self.agent1_acc * self.dt**2 / 2
         self.agent1_vel += self.agent1_acc * self.dt
-        self.agent1_acc = (self.F_interaction + self.agent1_force + self.agent1_control) / self.m
+        self.agent1_acc = ((self.F_interaction + self.agent1_force + self.agent1_control) / self.m )
 
         self.agent2_pos += self.agent2_vel * self.dt + self.agent2_acc * self.dt**2 / 2
         self.agent2_vel += self.agent2_acc * self.dt
-        self.agent2_acc = (-self.F_interaction + self.agent2_force + self.agent2_control) / self.m
+        self.agent2_acc = ((-self.F_interaction + self.agent2_force + self.agent2_control) / self.m)
 
         # Record trajectory（コメントアウトのまま）
         self.trajectory_history['target'].append([self.target_pos[0].item(), self.target_pos[1].item()])

@@ -4,9 +4,10 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.patches import Circle
 import sys
-
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 環境のインポート
-from EnvTest import DyadTrackingEnv
+from Environment.EnvSolo import SoloTrackingEnv
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -31,7 +32,7 @@ def test_tracking_environment():
         'enable_noise': True               # ノイズ有効化
     }
     
-    env = DyadTrackingEnv(dt=0.01, noise_config=noise_config)
+    env = SoloTrackingEnv(dt=0.01, noise_config=noise_config)
     
     # ========== 2. シミュレーション実行 ==========
     num_steps = 3000  # 30秒（dt=0.01なら）
@@ -327,7 +328,7 @@ def compare_with_without_noise():
     
     for name, config in [("ノイズなし", noise_config_off), ("ノイズあり", noise_config_on)]:
         print(f"\n{name}でシミュレーション実行中...")
-        env = DyadTrackingEnv(dt=0.01, noise_config=config)
+        env = SoloTrackingEnv(dt=0.01, noise_config=config)
         
         errors = []
         for _ in range(2000):

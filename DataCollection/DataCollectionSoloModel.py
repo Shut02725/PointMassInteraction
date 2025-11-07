@@ -21,6 +21,7 @@ class DataSaver:
         self.save_dir.mkdir(exist_ok=True)
         self.metadata_file = self.save_dir / "data_metadata.json"
         self.metadata = self.load_metadata()
+    
     def load_metadata(self):
         """loading meta data file"""
         if self.metadata_file.exists():
@@ -28,28 +29,34 @@ class DataSaver:
                 return json.load(f)
         else:
             return {}
+    
     def save_metadata(self):
         """saving meta data file"""
         with open(self.metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(self.metadata, f, indent=2, ensure_ascii=False)    
+            json.dump(self.metadata, f, indent=2, ensure_ascii=False)
+    
     def generate_filename(self, data_type, agent_type, episodes, timesteps, sequence_length):
         """generating file name"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"{data_type}_{agent_type}_ep{episodes}_ts{timesteps}_seq{sequence_length}_{timestamp}"
+    
     def save_datasets_split(self, dataset1_dict, dataset2_dict, data_type, agent_type,
                             episodes, timesteps, sequence_length):
-        """saving datasets"""
+        """saving datasets with train/val split"""
         base_filename = self.generate_filename(data_type, agent_type, episodes, timesteps, sequence_length)
+        
         # Agent1 data
         agent1_filename = f"{base_filename}_agent1.pkl"
         agent1_path = self.save_dir / agent1_filename
         with open(agent1_path, 'wb') as f:
-            pickle.dump(dataset1, f)
+            pickle.dump(dataset1_dict, f)  # ← 修正
+        
         # Agent2 data
         agent2_filename = f"{base_filename}_agent2.pkl"
         agent2_path = self.save_dir / agent2_filename
         with open(agent2_path, 'wb') as f:
-            pickle.dump(dataset2, f)
+            pickle.dump(dataset2_dict, f)  # ← 修正
+        
         # update metadata
         metadata_key = base_filename
         self.metadata[metadata_key] = {
@@ -65,37 +72,42 @@ class DataSaver:
             'agent1_file': agent1_filename,
             'agent2_file': agent2_filename,
             'created_at': datetime.now().isoformat(),
-            'input_dim': dataset1[0]['input'].shape[1] if len(dataset1) > 0 else None,
-            'output_dim': dataset1[0]['output'].shape[1] if len(dataset1) > 0 else None
+            'input_dim': dataset1_dict['training'][0]['input'].shape[1] if len(dataset1_dict['training']) > 0 else None,  # ← 修正
+            'output_dim': dataset1_dict['training'][0]['output'].shape[1] if len(dataset1_dict['training']) > 0 else None  # ← 修正
         }
         self.save_metadata()
+        
         print(f"Data has been saved:")
-        print(f"  Agent1: {agent1_filename} (size: {len(dataset1)})")
-        print(f"  Trainig: {len(dataset1_dict['training'])} samples")
-        print(f"  validation: {len(dataset1_dict['validation'])} samples")
-        print(f"  Agent2: {agent2_filename} (size: {len(dataset2)})")
-        print(f"  Trainig: {len(dataset2_dict['training'])} samples")
-        print(f"  validation: {len(dataset2_dict['validation'])} samples")
-
+        print(f"  Agent1: {agent1_filename}")
+        print(f"    Training: {len(dataset1_dict['training'])} samples")
+        print(f"    Validation: {len(dataset1_dict['validation'])} samples")
+        print(f"  Agent2: {agent2_filename}")
+        print(f"    Training: {len(dataset2_dict['training'])} samples")
+        print(f"    Validation: {len(dataset2_dict['validation'])} samples")
+        
         return metadata_key
     
     def load_datasets(self, metadata_key):
         """loading datasets"""
         if metadata_key not in self.metadata:
             raise FileNotFoundError(f"Metadata key not found: {metadata_key}")
+        
         meta = self.metadata[metadata_key]
+        
         # loading agent1 data
         agent1_path = self.save_dir / meta['agent1_file']
         with open(agent1_path, 'rb') as f:
             dataset1 = pickle.load(f)
+        
         # loading agent2 data
         agent2_path = self.save_dir / meta['agent2_file']
         with open(agent2_path, 'rb') as f:
             dataset2 = pickle.load(f)
+        
         print(f"data has been loaded: {metadata_key}")
         if isinstance(dataset1, dict):
             print(f"  Agent1: 訓練={len(dataset1.get('training', []))} samples, 検証={len(dataset1.get('validation', []))} samples")
-            print(f"  Agent2: 訓練={len(dataset2.get('training', []))} samples, 検証={len(dataset2.get('validation', []))} samples")    
+            print(f"  Agent2: 訓練={len(dataset2.get('training', []))} samples, 検証={len(dataset2.get('validation', []))} samples")
         else:
             print(f"  Agent1: {len(dataset1)} samples")
             print(f"  Agent2: {len(dataset2)} samples")
@@ -107,58 +119,69 @@ class DataSaver:
         if not self.metadata:
             print("There is no saved data")
             return
-
+        
         print("\n=== The lists of saved data ===")
-        print(f"{'Key':<50} {'Type':<15} {'Episodes':<8} {'Timesteps':<9} {'Seq Len':<7} {'Size':<10} {'Created':<16}")
+        print(f"{'Key':<50} {'Type':<15} {'Episodes':<8} {'Timesteps':<9} {'Train/Val':<15} {'Created':<16}")
         print("-" * 120)
-
+        
         for key, info in self.metadata.items():
             created_date = datetime.fromisoformat(info['created_at']).strftime('%m-%d %H:%M')
-            total_size = info['agent1_dataset_size'] + info['agent2_dataset_size']
+            
+            # ← 修正: train/val sizeを表示
+            if 'agent1_train_size' in info:
+                train_val = f"{info['agent1_train_size']}/{info['agent1_val_size']}"
+            else:
+                # 古い形式の場合
+                total_size = info.get('agent1_dataset_size', 0) + info.get('agent2_dataset_size', 0)
+                train_val = f"{total_size}"
+            
             print(f"{key:<50} {info['data_type']:<15} {info['episodes']:<8} "
-                  f"{info['timesteps']:<9} {info['sequence_length']:<7} {total_size:<10} {created_date:<16}")
+                  f"{info['timesteps']:<9} {train_val:<15} {created_date:<16}")
     
     def delete_data(self, metadata_key):
         """delete the data"""
         if metadata_key not in self.metadata:
             print(f"Data does not be found: {metadata_key}")
             return
+        
         meta = self.metadata[metadata_key]
+        
         # delete the file
         agent1_path = self.save_dir / meta['agent1_file']
         agent2_path = self.save_dir / meta['agent2_file']
+        
         if agent1_path.exists():
             agent1_path.unlink()
         if agent2_path.exists():
             agent2_path.unlink()
+        
         # del from metadata
         del self.metadata[metadata_key]
         self.save_metadata()
+        
         print(f"data has been deleted: {metadata_key}")
 
-def collect_solo_tracking_data(total_timesteps=10000, sequence_length=10, auto_save=True, save_dir="/home/hino/Desktop/PointMassInteraction/TrackingData/solo_tracking_data"):
+
+def collect_episode_data(env, total_timesteps, sequence_length):
     """
-    Collecting the sequensial data from solo tracking env
+    単一エピソードからデータを収集
     
     Args:
-        total_timesteps
-        sequence_length
-        auto_save
-        save_dir
+        env: 環境インスタンス
+        total_timesteps: 収集するタイムステップ数
+        sequence_length: シーケンスの長さ
     
     Returns:
-        dataset1, dataset2, saved_key
+        dataset1, dataset2: 収集されたデータセット
     """
     dataset1 = []
     dataset2 = []
-    print(f"start collecting time sequence data: {total_timesteps}steps, sequence length={sequence_length}")
-    if auto_save:
-        saver = DataSaver(save_dir)
-    env = SoloTrackingEnv(dt=0.01)
+    
     agent1_sequence_inputs = []
-    agent2_sequence_inputs = []  # タイポ修正
+    agent2_sequence_inputs = []
     agent1_sequence_outputs = []
     agent2_sequence_outputs = []
+    
     # each agent's state
     agent1_state = torch.cat([
         env.agent1_pos_error,
@@ -170,12 +193,13 @@ def collect_solo_tracking_data(total_timesteps=10000, sequence_length=10, auto_s
         env.agent2_vel_error,
         env.agent2_acc_error
     ])
-
+    
     for step in range(total_timesteps):
         # saving current state
         agent1_state_prev = agent1_state.clone()
         agent2_state_prev = agent2_state.clone()
-        # input data（state, control input, interaction force, self obeservation）
+        
+        # input data
         agent1_input = torch.cat([
             agent1_state_prev,
             env.agent1_control,
@@ -185,11 +209,13 @@ def collect_solo_tracking_data(total_timesteps=10000, sequence_length=10, auto_s
         agent2_input = torch.cat([
             agent2_state_prev,
             env.agent2_control,
-            - env.F_interaction + env.agent2_force,
+            -env.F_interaction + env.agent2_force,
             env.agent2_self_obs
         ])
+        
         # step environment
         env.step()
+        
         # agent's state
         agent1_state = torch.cat([
             env.agent1_pos - env.target_pos,
@@ -201,107 +227,133 @@ def collect_solo_tracking_data(total_timesteps=10000, sequence_length=10, auto_s
             env.agent2_vel - env.target_vel,
             env.agent2_acc - env.target_acc
         ])
+        
         # output data (state change)
         agent1_output = agent1_state - agent1_state_prev
         agent2_output = agent2_state - agent2_state_prev
+        
         # add sequence buffer
         agent1_sequence_inputs.append(agent1_input.clone())
         agent2_sequence_inputs.append(agent2_input.clone())
         agent1_sequence_outputs.append(agent1_output.clone())
         agent2_sequence_outputs.append(agent2_output.clone())
+        
         # append dataset if dataset length reached
         if len(agent1_sequence_inputs) == sequence_length:
             dataset1.append({
-                'input': torch.stack(agent1_sequence_inputs),  # (sequence_length, input_dim)
-                'output': torch.stack(agent1_sequence_outputs)  # (sequence_length, output_dim)
+                'input': torch.stack(agent1_sequence_inputs),
+                'output': torch.stack(agent1_sequence_outputs)
             })
             dataset2.append({
-                'input': torch.stack(agent2_sequence_inputs),  # (sequence_length, input_dim)
-                'output': torch.stack(agent2_sequence_outputs)  # (sequence_length, output_dim)
+                'input': torch.stack(agent2_sequence_inputs),
+                'output': torch.stack(agent2_sequence_outputs)
             })
             agent1_sequence_inputs.pop(0)
             agent2_sequence_inputs.pop(0)
             agent1_sequence_outputs.pop(0)
             agent2_sequence_outputs.pop(0)
+        
         # display progression
-        if step % 100 == 0:
-            print(f"Step: {step:,}/{total_timesteps:,} ({step/total_timesteps*100:.1f}%) - Collected sequences: {len(dataset1)}")
-    print(f"data has been collected!")
-    print(f"Agent1 datasets: {len(dataset1)} sequences")
-    print(f"Agent2 datasets: {len(dataset2)} sequences")
-    # autosaving final data
-    saved_key = None
-    if auto_save and len(dataset1) > 0:
-        saved_key = saver.save_datasets(
-            dataset1, dataset2, 
-            'solo_tracking', 'collected',
-            0, total_timesteps, sequence_length
-        )
-    return dataset1, dataset2, saved_key
+        if step % 500 == 0:
+            print(f"    Step: {step:,}/{total_timesteps:,} ({step/total_timesteps*100:.1f}%)")
+    
+    return dataset1, dataset2
 
-def collect_multiple_episodes(num_episodes=100, timesteps_per_episode=6000, crop_timesteps=3000, 
-                                sequence_length=10, num_val_episodes=20, auto_save=True, 
-                                save_dir="/home/hino/Desktop/PointMassInteraction//TrackingData/solo_tracking_data", 
-                                random_seed=42):
+
+def collect_multiple_episodes(
+    num_episodes=50,
+    total_timesteps=6000,
+    crop_timesteps=3000,
+    sequence_length=10,
+    num_val_episodes=10,
+    warmup_steps=200,
+    auto_save=True,
+    save_dir="/home/hino/Desktop/PointMassInteraction/TrackingData/solo_tracking_data",
+    random_seed=42
+):
     """
-    Collecting data across multi-episodes
+    複数エピソードでデータ収集し、各エピソードからランダムに切り取る
     
     Args:
-        num_episodes
-        timesteps_per_episode
-        sequence_length
-        auto_save
-        save_dir
+        num_episodes: エピソード数
+        total_timesteps: 各エピソードで収集する総タイムステップ数
+        crop_timesteps: 各エピソードから切り取るタイムステップ数
+        sequence_length: シーケンスの長さ
+        num_val_episodes: 検証用エピソード数（最後のN個）
+        warmup_steps: カルマンフィルタのウォームアップステップ数
+        auto_save: 自動保存するか
+        save_dir: 保存先ディレクトリ
+        random_seed: ランダムシード
     """
+    random.seed(random_seed)
+    
     train_dataset1 = []
     train_dataset2 = []
     val_dataset1 = []
     val_dataset2 = []
-    print(f"collecting multi-episodes data: {num_episodes}episode × {timesteps_per_episode}steps")
-
-    min_start = 0
-    max_start = 3000
+    
+    print(f"=== データ収集設定 ===")
+    print(f"エピソード数: {num_episodes}")
+    print(f"各エピソードの総タイムステップ: {total_timesteps}")
+    print(f"各エピソードから切り取るタイムステップ: {crop_timesteps}")
+    print(f"ウォームアップステップ: {warmup_steps}")
+    print(f"訓練用エピソード: {num_episodes - num_val_episodes}")
+    print(f"検証用エピソード: {num_val_episodes}")
+    print(f"シーケンス長: {sequence_length}")
+    print()
+    
+    # 切り取り可能な範囲を計算
+    max_start = total_timesteps - crop_timesteps
+    if warmup_steps > max_start:
+        raise ValueError(f"ウォームアップステップ({warmup_steps})が大きすぎます。max_start={max_start}")
+    
     num_train_episodes = num_episodes - num_val_episodes
-
+    
     if auto_save:
         saver = DataSaver(save_dir)
-
+    
     for episode in range(num_episodes):
-        print(f"\nepisode {episode+1}/{num_episodes}")
-        # initialize environment
+        print(f"\n{'='*60}")
+        print(f"エピソード {episode+1}/{num_episodes}")
+        
+        # initialize environment with random initialization
         env = SoloTrackingEnv(dt=0.01)
-        episode_dataset1, episode_dataset2, _ = collect_solo_tracking_data(
-            total_timesteps=timesteps_per_episode,
-            sequence_length=sequence_length,
-            auto_save=False
+        
+        print(f"  データ収集中: {total_timesteps} timesteps...")
+        episode_dataset1, episode_dataset2 = collect_episode_data(
+            env, total_timesteps, sequence_length
         )
-
-        print(f"  data has been collected: Agent1={len(episode_dataset1)}, Agent2={len(episode_dataset2)} sequences")
-
-        start_idx = random.randint(min_start, max_start)
-        end_idx = start_idx + crop_timesteps - sequence_length + 1
-
+        
+        print(f"  収集完了: Agent1={len(episode_dataset1)}, Agent2={len(episode_dataset2)} sequences")
+        
+        # ランダムな開始位置を決定（ウォームアップ後から）
+        start_idx = random.randint(warmup_steps, max_start)
+        end_idx = start_idx + crop_timesteps - sequence_length + 1  # サンプル数に変換
+        
+        # データを切り取り
         cropped_dataset1 = episode_dataset1[start_idx:end_idx]
         cropped_dataset2 = episode_dataset2[start_idx:end_idx]
-
-        print(f"  cropped: timestep {start_idx}～{start_idx + crop_timesteps}")
-        print(f"  after cropped: Agent1={len(cropped_dataset1)}, Agent2={len(cropped_dataset2)} sequences")
-
+        
+        print(f"  切り取り: タイムステップ {start_idx}～{start_idx + crop_timesteps}")
+        print(f"  切り取り後: Agent1={len(cropped_dataset1)}, Agent2={len(cropped_dataset2)} sequences")
+        
+        # 訓練用か検証用かを振り分け
         if episode < num_train_episodes:
             train_dataset1.extend(cropped_dataset1)
             train_dataset2.extend(cropped_dataset2)
-            print(f"  → add to training data")
+            print(f"  → 訓練用データに追加")
         else:
             val_dataset1.extend(cropped_dataset1)
             val_dataset2.extend(cropped_dataset2)
-            print(f"  → add to validation data")
-
+            print(f"  → 検証用データに追加")
+    
     print(f"\n{'='*60}")
-    print(f"all episodes data collected！")
-    print(f"\nfinal data size:")
-    print(f"  Training - Agent1: {len(train_dataset1)}, Agent2: {len(train_dataset2)}")
-    print(f"  Validation - Agent1: {len(val_dataset1)}, Agent2: {len(val_dataset2)}")
-
+    print(f"全エピソード完了！")
+    print(f"\n最終データサイズ:")
+    print(f"  訓練 - Agent1: {len(train_dataset1)}, Agent2: {len(train_dataset2)}")
+    print(f"  検証 - Agent1: {len(val_dataset1)}, Agent2: {len(val_dataset2)}")
+    
+    # 辞書形式でまとめる
     dataset1 = {
         'training': train_dataset1,
         'validation': val_dataset1
@@ -309,8 +361,9 @@ def collect_multiple_episodes(num_episodes=100, timesteps_per_episode=6000, crop
     dataset2 = {
         'training': train_dataset2,
         'validation': val_dataset2
-        }
-    # autosaving all data
+    }
+    
+    # 保存
     saved_key = None
     if auto_save:
         saved_key = saver.save_datasets_split(
@@ -318,83 +371,109 @@ def collect_multiple_episodes(num_episodes=100, timesteps_per_episode=6000, crop
             'solo_tracking', 'random_crop',
             num_episodes, total_timesteps, sequence_length
         )
+    
+    return dataset1, dataset2, saved_key  # ← 修正
 
-    return all_dataset1, all_dataset2, saved_key
 
 def main():
     """
     main function - data collection demo
     """
-    print("=== Solo Tracking Data ===")
+    print("=== Solo Tracking Data Collection ===")
+    
     # DataSaver
     saver = DataSaver()
+    
     # List saved data
     saver.list_saved_data()
-    # データ収集の選択肢
-    print("\ndata collection option:")
-    print("1. only 1 session (10,000 steps) [recommended varios trajectories]")
-    print("2. multi-episodes（100 × 6,000ステップ）")
-    print("3. custom episodes and steps")
-    print("4. test exist loaded data")
-    print("5. finish")
+    
+    print("\nデータ収集オプション:")
+    print("1. ランダム切り取り方式（推奨）")
+    print("   - 50エピソード × 6000ステップ収集")
+    print("   - 各エピソードから3000ステップをランダムに切り取り")
+    print("   - 最後の10エピソードを検証用")
+    print("2. カスタム設定")
+    print("3. 既存データの読み込みテスト")
+    print("4. 終了")
     
     while True:
         try:
-            choice = input("\n選択してください (1-5): ").strip()
+            choice = input("\n選択してください (1-4): ").strip()
             
             if choice == '1':
-                print("単一セッションデータ収集を開始...")
-                dataset1, dataset2, key = collect_solo_tracking_data(
-                    total_timesteps=10000,  # 10,000 steps
-                    sequence_length=10
-                )
-                print(f"保存キー: {key}")
-                break
-                
-            elif choice == '2':
-                print("複数エピソードデータ収集を開始...")
+                print("\nランダム切り取り方式でデータ収集を開始...")
                 dataset1, dataset2, key = collect_multiple_episodes(
-                    num_episodes=100,
-                    timesteps_per_episode=6000
+                    num_episodes=50,
+                    total_timesteps=6000,
+                    crop_timesteps=3000,
+                    sequence_length=10,
+                    num_val_episodes=10,
+                    warmup_steps=200,
+                    auto_save=True
                 )
-                print(f"保存キー: {key}")
+                print(f"\n保存キー: {key}")
                 break
+            
+            elif choice == '2':
+                print("\nカスタム設定:")
+                num_ep = int(input("  エピソード数: "))
+                total_ts = int(input("  各エピソードの総タイムステップ: "))
+                crop_ts = int(input("  切り取るタイムステップ: "))
+                val_ep = int(input("  検証用エピソード数: "))
+                seq_len = int(input("  シーケンス長: "))
+                warmup = int(input("  ウォームアップステップ: "))
                 
+                dataset1, dataset2, key = collect_multiple_episodes(
+                    num_episodes=num_ep,
+                    total_timesteps=total_ts,
+                    crop_timesteps=crop_ts,
+                    sequence_length=seq_len,
+                    num_val_episodes=val_ep,
+                    warmup_steps=warmup,
+                    auto_save=True
+                )
+                print(f"\n保存キー: {key}")
+                break
+            
             elif choice == '3':
-                timesteps = int(input("総ステップ数を入力: "))
-                seq_len = int(input("シーケンス長を入力: "))
-                dataset1, dataset2, key = collect_solo_tracking_data(
-                    total_timesteps=timesteps,
-                    sequence_length=seq_len
-                )
-                print(f"保存キー: {key}")
-                break
-                
-            elif choice == '4':
                 saver.list_saved_data()
                 if saver.metadata:
                     key = input("読み込むデータのキーを入力: ").strip()
                     try:
                         dataset1, dataset2 = saver.load_datasets(key)
                         print(f"読み込み成功！")
-                        if len(dataset1) > 0:
-                            print(f"サンプルデータ形状:")
+                        
+                        if isinstance(dataset1, dict) and 'training' in dataset1:
+                            if len(dataset1['training']) > 0:
+                                print(f"\nサンプルデータ形状:")
+                                print(f"  Input: {dataset1['training'][0]['input'].shape}")
+                                print(f"  Output: {dataset1['training'][0]['output'].shape}")
+                        elif len(dataset1) > 0:
+                            print(f"\nサンプルデータ形状:")
                             print(f"  Input: {dataset1[0]['input'].shape}")
                             print(f"  Output: {dataset1[0]['output'].shape}")
                     except Exception as e:
                         print(f"読み込みエラー: {e}")
+                        import traceback
+                        traceback.print_exc()
                 break
-                
-            elif choice == '5':
+            
+            elif choice == '4':
                 print("終了します。")
                 break
-                
+            
             else:
-                print("無効な選択です。1-5を入力してください。")
-                
+                print("無効な選択です。1-4を入力してください。")
+        
         except KeyboardInterrupt:
             print("\n\n処理が中断されました。")
             break
+        except Exception as e:
+            print(f"エラー: {e}")
+            import traceback
+            traceback.print_exc()
+            break
+
 
 if __name__ == "__main__":
     main()
